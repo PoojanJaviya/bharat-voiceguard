@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', 'Outfit', system-ui, -apple-system, sans-serif;
+  --font-display: 'Outfit', sans-serif;
+
+  --color-navy-950: #050814;
+  --color-navy-900: #080d1a;
+  --color-navy-800: #0f172a;
+  --color-navy-700: #1e293b;
+  --color-navy-600: #334155;
+  --color-cyan-400: #22d3ee;
+  --color-cyan-500: #06b6d4;
+}
+
+/* Custom styles and premium glassmorphism classes */
+@layer base {
+  body {
+    background-color: #050814;
+    font-family: 'Plus Jakarta Sans', 'Outfit', sans-serif;
+  }
+}
+
+.glass-card {
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glass-card-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card-hover:hover {
+  background: rgba(15, 23, 42, 0.6);
+  border-color: rgba(6, 182, 212, 0.2);
+  box-shadow: 0 10px 30px -10px rgba(6, 182, 212, 0.15);
+  transform: translateY(-2px);
+}
+
+/* Pulse animation for the glowing live indicators */
+@keyframes glow-pulse-green {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+    background-color: rgba(16, 185, 129, 1);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.8);
+    background-color: rgba(52, 211, 153, 1);
+  }
+}
+
+@keyframes glow-pulse-amber {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(245, 158, 11, 0.4);
+    background-color: rgba(245, 158, 11, 1);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(245, 158, 11, 0.8);
+    background-color: rgba(251, 191, 36, 1);
+  }
+}
+
+@keyframes glow-pulse-red {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(239, 68, 68, 0.4);
+    background-color: rgba(239, 68, 68, 1);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.8);
+    background-color: rgba(248, 113, 113, 1);
+  }
+}
+
+.glow-green {
+  animation: glow-pulse-green 2s infinite;
+}
+
+.glow-amber {
+  animation: glow-pulse-amber 2s infinite;
+}
+
+.glow-red {
+  animation: glow-pulse-red 2s infinite;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
