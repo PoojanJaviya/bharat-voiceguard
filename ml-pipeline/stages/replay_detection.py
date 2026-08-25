@@ -99,7 +99,7 @@ def _extract_lfcc(waveform: torch.Tensor, sr: int = 16000, n_lfcc: int = 20) -> 
     a torch.Tensor back out at the boundaries of this module to match the
     rest of the pipeline's convention.
     """
-    audio = waveform.numpy() if isinstance(waveform, torch.Tensor) else waveformx
+    audio = waveform.numpy() if isinstance(waveform, torch.Tensor) else waveform
 
     n_fft = 512
     hop_length = 160
