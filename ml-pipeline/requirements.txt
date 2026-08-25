@@ -6,3 +6,9 @@ numpy
 speechbrain
 faster-whisper
 transformers
+librosa
+scikit-learn
+scipy
+fastapi
+uvicorn[standard]
+python-multipart
