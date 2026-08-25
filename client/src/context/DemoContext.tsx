@@ -365,6 +365,16 @@ interface DemoContextType {
   resetVerificationState: () => void;
   activeHistoricalCallId: string | null;
   setActiveHistoricalCallId: (id: string | null) => void;
+  
+  // Live connection variables
+  liveMode: boolean;
+  setLiveMode: (live: boolean) => void;
+  clientRole: 'scammer' | 'user' | null;
+  setClientRole: (role: 'scammer' | 'user' | null) => void;
+  clientId: string;
+  signalingClients: string[];
+  connectLiveCall: (targetId: string) => void;
+  endLiveCall: () => void;
 }
 
 const DemoContext = createContext<DemoContextType | undefined>(undefined);
@@ -401,6 +411,19 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Verification flow
   const [independentVerifyProgress, setIndependentVerifyProgress] = useState<'idle' | 'calling' | 'success' | 'failed'>('idle');
 
+  // Live connection state
+  const [liveMode, setLiveMode] = useState<boolean>(false);
+  const [clientRole, setClientRole] = useState<'scammer' | 'user' | null>(null);
+  const [clientId] = useState<string>(() => 'Client-' + Math.floor(Math.random() * 9000 + 1000));
+  const [signalingClients, setSignalingClients] = useState<string[]>([]);
+
+  const signalingWsRef = useRef<WebSocket | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const streamWsRef = useRef<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const targetIdRef = useRef<string | null>(null);
+
   const currentScenario = scenarios.find(s => s.id === currentScenarioId) || scenarios[0];
   const timerRef = useRef<any>(null);
   const wobbleIntervalRef = useRef<any>(null);
@@ -426,6 +449,235 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setWarningLanguage(languageMode);
     }
   }, [languageMode, currentScenarioId]);
+
+  // Signaling WebSocket handling
+  useEffect(() => {
+    if (!clientRole || !liveMode) {
+      if (signalingWsRef.current) {
+        signalingWsRef.current.close();
+        signalingWsRef.current = null;
+      }
+      return;
+    }
+
+    const host = window.location.hostname;
+    const wsUrl = `ws://${host}:8000/signaling/${clientRole}-${clientId}`;
+    const ws = new WebSocket(wsUrl);
+    signalingWsRef.current = ws;
+
+    ws.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'clients_list') {
+        const otherClients = data.clients.filter((c: string) => c !== `${clientRole}-${clientId}`);
+        setSignalingClients(otherClients);
+      } else if (data.type === 'offer' && clientRole === 'user') {
+        targetIdRef.current = data.sender;
+        await acceptIncomingCall(data.offer, data.sender);
+      } else if (data.type === 'answer' && clientRole === 'scammer') {
+        if (peerConnectionRef.current) {
+          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+          setCallState('active');
+        }
+      } else if (data.type === 'candidate') {
+        if (peerConnectionRef.current) {
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+        }
+      } else if (data.type === 'end') {
+        cleanupLiveCallState();
+      }
+    };
+
+    ws.onclose = () => setSystemStatus('offline');
+    ws.onerror = () => setSystemStatus('error');
+    ws.onopen = () => setSystemStatus('ready');
+
+    return () => {
+      ws.close();
+      signalingWsRef.current = null;
+    };
+  }, [clientRole, clientId, liveMode]);
+
+  const sendSignaling = (msg: any) => {
+    if (signalingWsRef.current && signalingWsRef.current.readyState === WebSocket.OPEN) {
+      signalingWsRef.current.send(JSON.stringify(msg));
+    }
+  };
+
+  const connectLiveCall = async (targetId: string) => {
+    targetIdRef.current = targetId;
+    setCallState('calling');
+    setIsAnalyzing(true);
+    setTranscriptLines([]);
+
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    peerConnectionRef.current = pc;
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignaling({ type: 'candidate', candidate: event.candidate, target: targetId });
+      }
+    };
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStreamRef.current = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendSignaling({ type: 'offer', offer, target: targetId });
+    } catch (err) {
+      console.error("Failed to capture mic:", err);
+      setCallState('idle');
+      setIsAnalyzing(false);
+    }
+  };
+
+  const acceptIncomingCall = async (offer: any, senderId: string) => {
+    setCallState('active');
+    setIsAnalyzing(true);
+    setTranscriptLines([]);
+
+    // Dynamically override current scenario target fields to show live client info
+    const senderName = senderId.replace('scammer-', '').replace('user-', '');
+    currentScenario.caller = `Scammer (${senderName})`;
+    currentScenario.number = senderId;
+
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    peerConnectionRef.current = pc;
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignaling({ type: 'candidate', candidate: event.candidate, target: senderId });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      const remoteStream = event.streams[0] || new MediaStream([event.track]);
+      
+      // Play scammer audio
+      const audio = new Audio();
+      audio.srcObject = remoteStream;
+      audio.play().catch(err => console.error("Audio playback error:", err));
+
+      // Stream audio to Python ML engine
+      startLiveStreamToBackend(remoteStream);
+    };
+
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendSignaling({ type: 'answer', answer, target: senderId });
+  };
+
+  const startLiveStreamToBackend = (stream: MediaStream) => {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) {
+      console.error("AudioContext not supported");
+      return;
+    }
+    const audioContext = new AudioCtx({ sampleRate: 16000 });
+    audioContextRef.current = audioContext;
+
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+
+    const host = window.location.hostname;
+    const wsUrl = `ws://${host}:8000/stream`;
+    const ws = new WebSocket(wsUrl);
+    streamWsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ sample_rate: 16000, channels: 1 }));
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'risk_update' || data.type === 'final_result') {
+        setRiskScore(data.risk_score);
+        setRiskLevel(data.risk_level === 'HIGH_RISK' ? 'HIGH RISK' : data.risk_level === 'MEDIUM_RISK' ? 'VERIFY' : 'LOW RISK');
+        
+        // Format voice authenticity to trigger red highlights when synthetic
+        const isSynthetic = data.voice_authenticity < 0.50;
+        const synthPercent = ((1 - data.voice_authenticity) * 100).toFixed(0);
+        const authPercent = (data.voice_authenticity * 100).toFixed(0);
+        setVoiceAuthenticity(isSynthetic ? `${synthPercent}% likely synthetic` : `${authPercent}% authentic`);
+        
+        setSpeakerConsistency(data.speaker_match !== null ? `${(data.speaker_match * 100).toFixed(0)}% match` : 'Unknown signature');
+        
+        const isReplay = data.reasons.some((r: string) => r.toLowerCase().includes('replay'));
+        setReplayScore(isReplay ? 'Critical replay match' : 'Low probability');
+        
+        if (data.intent && data.intent.length > 0) {
+          setScamIntent(data.intent.includes('OTP_REQUEST') ? 'Critical' : 'High');
+        } else {
+          setScamIntent('Low');
+        }
+
+        // Set explanation dynamically based on ML model outcomes
+        if (data.reasons && data.reasons.length > 0) {
+          currentScenario.explanation = `Signals Flagged: ${data.reasons.join(', ')}. Recommendation: ${data.recommendation || 'Verify caller.'}`;
+        } else {
+          currentScenario.explanation = 'Scanning live audio stream... No anomalous signals identified yet.';
+        }
+        
+        if (data.transcript) {
+          setTranscriptLines([
+            {
+              speaker: 'Caller',
+              text: data.transcript,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              tags: data.intent
+            }
+          ]);
+        }
+      }
+    };
+
+    processor.onaudioprocess = (e) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const inputBuffer = e.inputBuffer.getChannelData(0);
+      const pcm16 = new Int16Array(inputBuffer.length);
+      for (let i = 0; i < inputBuffer.length; i++) {
+        const s = Math.max(-1, Math.min(1, inputBuffer[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      ws.send(pcm16.buffer);
+    };
+  };
+
+  const endLiveCall = () => {
+    if (targetIdRef.current) {
+      sendSignaling({ type: 'end', target: targetIdRef.current });
+    }
+    cleanupLiveCallState();
+  };
+
+  const cleanupLiveCallState = () => {
+    setCallState('ended');
+    setIsAnalyzing(false);
+
+    if (streamWsRef.current) {
+      try { streamWsRef.current.send(JSON.stringify({ type: 'end' })); } catch (e) {}
+      streamWsRef.current.close();
+      streamWsRef.current = null;
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    targetIdRef.current = null;
+  };
 
   // Scenario selection logic
   const selectScenario = (id: number) => {
@@ -457,6 +709,10 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const endCall = () => {
+    if (liveMode) {
+      endLiveCall();
+      return;
+    }
     setCallState('ended');
     setIsAnalyzing(false);
     if (timerRef.current) clearInterval(timerRef.current);
@@ -464,28 +720,22 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const continueCall = () => {
-    // Simple mock button click: lowers risk slightly or continues without alert
     setRiskScore(prev => Math.max(10, prev - 15));
   };
 
-  // Live Simulation Core Loop
+  // Live Simulation Core Loop (Only runs in mock mode)
   useEffect(() => {
-    if (callState !== 'active') return;
+    if (callState !== 'active' || liveMode) return;
 
-    // Start elapsed duration timer
     timerRef.current = setInterval(() => {
       setCallDuration(prev => {
         const nextTime = prev + 1;
-
-        // Check if there is a timeline event at nextTime
         const event = currentScenario.timeline.find(e => e.time === nextTime);
         if (event) {
-          // Format duration to MM:SS
           const m = Math.floor(nextTime / 60).toString().padStart(2, '0');
           const s = (nextTime % 60).toString().padStart(2, '0');
           const timestamp = `${m}:${s}`;
 
-          // Feed correct language into transcript
           let spokenText = event.text.en;
           if (warningLanguage === 'hi') spokenText = event.text.hi;
           if (warningLanguage === 'guj') spokenText = event.text.guj;
@@ -495,7 +745,6 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
             { speaker: event.speaker, text: spokenText, time: timestamp, tags: event.tags }
           ]);
 
-          // Update metrics
           if (event.updateRiskScore !== undefined) setRiskScore(event.updateRiskScore);
           if (event.updateRiskLevel !== undefined) setRiskLevel(event.updateRiskLevel);
           if (event.updateVoiceAuthenticity !== undefined) setVoiceAuthenticity(event.updateVoiceAuthenticity);
@@ -505,7 +754,6 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (event.updateContextRisk !== undefined) setContextRisk(event.updateContextRisk);
         }
 
-        // Auto end call after last event + 6s
         const maxTime = Math.max(...currentScenario.timeline.map(t => t.time), 0);
         if (nextTime > maxTime + 6) {
           endCall();
@@ -515,15 +763,11 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
     }, 1000);
 
-    // Risk score wobbling to simulate active AI computation
     wobbleIntervalRef.current = setInterval(() => {
       setRiskScore(prev => {
-        // Only wobble active, non-zero values, and clamp it
         if (prev <= 10) return prev;
-        const wobble = Math.floor(Math.random() * 5) - 2; // -2 to +2
+        const wobble = Math.floor(Math.random() * 5) - 2;
         const finalScore = prev + wobble;
-        // Clamp between initial score and maximum score of scenario
-        const target = scenarios.find(s => s.id === currentScenarioId) || scenarios[0];
         return Math.min(Math.max(10, finalScore), 100);
       });
     }, 1500);
@@ -532,7 +776,7 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (timerRef.current) clearInterval(timerRef.current);
       if (wobbleIntervalRef.current) clearInterval(wobbleIntervalRef.current);
     };
-  }, [callState, currentScenarioId, warningLanguage]);
+  }, [callState, currentScenarioId, warningLanguage, liveMode]);
 
   // Trusted contacts helpers
   const addTrustedContact = async (contact: Omit<TrustedContact, 'id' | 'verificationStatus' | 'voiceSignatureRegistered'>) => {
@@ -553,7 +797,6 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const result = await mockApi.simulateVerificationCall(phone);
     if (result.success) {
       setIndependentVerifyProgress('success');
-      // Create success system alert
       const newAlert: SystemAlert = {
         id: `alert-${Date.now()}`,
         severity: 'Informational',
@@ -617,7 +860,17 @@ export const DemoProvider: React.FC<{ children: React.ReactNode }> = ({ children
       triggerIndependentVerification,
       resetVerificationState,
       activeHistoricalCallId,
-      setActiveHistoricalCallId
+      setActiveHistoricalCallId,
+      
+      // Live variables
+      liveMode,
+      setLiveMode,
+      clientRole,
+      setClientRole,
+      clientId,
+      signalingClients,
+      connectLiveCall,
+      endLiveCall: endCall
     }}>
       {children}
     </DemoContext.Provider>

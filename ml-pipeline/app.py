@@ -462,3 +462,53 @@ def _analyze_stream_window(
         scam_intent_result=scam_intent_result,
         transcript=full_transcript,
     )
+
+
+# ---------------------------------------------------------------------------
+# WEBRTC SIGNALING — WS /signaling/{client_id}
+# ---------------------------------------------------------------------------
+# Simple signaling server to broker connection between Scammer and Target User
+# ---------------------------------------------------------------------------
+connected_clients = {}
+
+@app.websocket("/signaling/{client_id}")
+async def signaling_endpoint(websocket: WebSocket, client_id: str):
+    await websocket.accept()
+    connected_clients[client_id] = websocket
+    try:
+        # Broadcast list update to all connected clients
+        client_list = list(connected_clients.keys())
+        for cid, ws in list(connected_clients.items()):
+            try:
+                await ws.send_json({
+                    "type": "clients_list",
+                    "clients": client_list
+                })
+            except Exception:
+                pass
+
+        while True:
+            # Forward WebRTC offer/answer/candidate messages
+            data = await websocket.receive_json()
+            target = data.get("target")
+            if target and target in connected_clients:
+                # Inject sender ID so target knows where it came from
+                data["sender"] = client_id
+                await connected_clients[target].send_json(data)
+                
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        traceback.print_exc()
+    finally:
+        connected_clients.pop(client_id, None)
+        client_list = list(connected_clients.keys())
+        for cid, ws in list(connected_clients.items()):
+            try:
+                await ws.send_json({
+                    "type": "clients_list",
+                    "clients": client_list
+                })
+            except Exception:
+                pass
+
