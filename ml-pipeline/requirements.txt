@@ -5,3 +5,4 @@ silero-vad
 numpy
 speechbrain
 faster-whisper
+transformers
