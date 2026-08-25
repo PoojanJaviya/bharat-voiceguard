@@ -69,3 +69,7 @@ ENV/
 # macOS / Windows
 .DS_Store
 Thumbs.db
+
+
+mp4_to_wav.py
+*.mp4

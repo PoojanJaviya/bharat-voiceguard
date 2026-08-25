@@ -6,7 +6,8 @@ from audio_io import load_audio_file
 from vad import detect_speech_segments
 from chunker import chunk_waveform
 
-AUDIO_PATH = "/home/poojan/projects/bharat-voiceguard/ml-pipeline/test_call.wav"
+import os
+AUDIO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_call.wav")
 
 print("=" * 60)
 print("STEP 1: Load + standardize audio")
